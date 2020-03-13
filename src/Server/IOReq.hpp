@@ -2,7 +2,7 @@
 #define __IOREQ_H__
 
 #include "CmnHdr.h"
-#include "Utils.hpp"
+#include "LSocket.hpp"
 
 #define BUFFER_SIZE 1024 * 4
 
@@ -20,7 +20,7 @@ public:
         ReqType_Recv,
     };
 
-    bool Recv(SOCKET socket) {
+    bool Recv(LSocket socket) {
         ResetOverlapped();
         ZeroMemory(&(m_Data), sizeof(m_Data));
 
@@ -32,14 +32,14 @@ public:
         DWORD recvByte = 0;;
         DWORD flag = 0;
 
-        int iRet = WSARecv(m_Socket, &m_WSABuffser, 1, &recvByte, &flag, this, NULL);
+        int iRet = WSARecv(m_Socket.Get(), &m_WSABuffser, 1, &recvByte, &flag, this, NULL);
         if (iRet == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
             return false;
         }
         return true;
     }
 
-    bool Send(SOCKET socket, const char* pData, int len) {
+    bool Send(LSocket socket, const char* pData, int len) {
         ResetOverlapped();
         ZeroMemory(&(m_Data), sizeof(m_Data));
         memcpy(m_Data, pData, len);
@@ -52,19 +52,15 @@ public:
         DWORD sendByte = 0;
         DWORD flag = 0;
 
-        int iRet = WSASend(m_Socket, &m_WSABuffser, 1, &sendByte, flag, this, NULL);
+        int iRet = WSASend(m_Socket.Get(), &m_WSABuffser, 1, &sendByte, flag, this, NULL);
         if (iRet == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
             return false;
         }
         return true;
     }
 
-    SOCKET Socket() const {
+    LSocket Socket() const {
         return m_Socket;
-    }
-
-    void CloseSocket() {
-        Utils::CleanupSocket(m_Socket);
     }
 
     ReqType Type() const {
@@ -85,8 +81,8 @@ private:
 private:
     char               m_Data[BUFFER_SIZE];
     WSABUF             m_WSABuffser;
-    SOCKET             m_Socket;
+    LSocket            m_Socket;
     ReqType            m_Type;
 };
 
-#endif
+#endif // __IOREQ_H__

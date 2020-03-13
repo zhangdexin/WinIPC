@@ -1,0 +1,9 @@
+*.user
+/src/Debug
+.vs
+/src/Client/Debug
+*.vcxproj.user
+/src/Server/Debug
+*.obj
+*.log
+*.idb

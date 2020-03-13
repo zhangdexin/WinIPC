@@ -8,14 +8,16 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 IocpServer::IocpServer() :
-    m_IocpHandle(0)
+    m_IocpHandle(0),
+    m_RecvCb(nullptr)
 {}
 
 IocpServer::~IocpServer()
 {}
 
-void IocpServer::Run()
+void IocpServer::Run(const RecvFunction& recvCb)
 {
+    m_RecvCb = recvCb;
     if (Init() < 0) {
         return;
     }
@@ -40,7 +42,34 @@ void IocpServer::Stop()
         m_IocpHandle.PostStatus(END_SERVER, -1, NULL);
     }
 
-    Utils::CleanupSocket(m_ListenSocket);
+    m_ListenSocket.Cleanup();
+}
+
+void IocpServer::SendMsg(const LSocket& sock, const char* data, DWORD size)
+{
+    DoResponse(sock, data, size);
+}
+
+void IocpServer::SendMsg(const LSocket& sock, const std::string& data)
+{
+    DoResponse(sock, data.c_str(), data.size());
+}
+
+// handle recv data
+void IocpServer::DoResponse(const LSocket& socket, const char* data, DWORD size)
+{
+    if (socket.IsInvalid()) {
+        std::cout << "response socket is invalid" << std::endl;
+        return;
+    }
+
+    // echo send
+    IOReq* res = new IOReq;
+
+    std::lock_guard<std::mutex> guard(m_PendingSendMutex);
+    m_PendingSendReqs.emplace(std::make_pair(socket, res));
+
+    res->Send(socket, data, size);
 }
 
 int IocpServer::Init()
@@ -65,7 +94,7 @@ int IocpServer::Init()
         return -1;
     }
 
-    struct addrinfo *result = NULL, *ptr = NULL, hints;
+    struct addrinfo *result = NULL, hints;
 
     ZeroMemory(&hints, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -83,7 +112,7 @@ int IocpServer::Init()
     // Create a SOCKET
     m_ListenSocket = WSASocket(result->ai_family, result->ai_socktype, 
         result->ai_protocol, NULL, 0, WSA_FLAG_OVERLAPPED);
-    if (m_ListenSocket == INVALID_SOCKET) {
+    if (m_ListenSocket.IsInvalid()) {
         std::cout << "create socket error: " << WSAGetLastError() << std::endl;
         freeaddrinfo(result);
         WSACleanup();
@@ -91,10 +120,10 @@ int IocpServer::Init()
     }
 
     // Setup the TCP listening socket
-    iResult = bind(m_ListenSocket, result->ai_addr, (int)result->ai_addrlen);
+    iResult = bind(m_ListenSocket.Get(), result->ai_addr, (int)result->ai_addrlen);
     if (iResult == SOCKET_ERROR) {
         std::cout << "bind failed: " << WSAGetLastError() << std::endl;
-        Utils::CleanupSocket(m_ListenSocket);
+        m_ListenSocket.Close();
         freeaddrinfo(result);
         WSACleanup();
         return -1;
@@ -102,10 +131,10 @@ int IocpServer::Init()
     freeaddrinfo(result);
 
     // Listen on a socket
-    iResult = listen(m_ListenSocket, SOMAXCONN);
+    iResult = listen(m_ListenSocket.Get(), SOMAXCONN);
     if (iResult == SOCKET_ERROR) {
         std::cout << "listen failed :" << WSAGetLastError() << std::endl;
-        Utils::CleanupSocket(m_ListenSocket);
+        m_ListenSocket.Close();
         WSACleanup();
         return -1;
     }
@@ -129,14 +158,17 @@ void IocpServer::DoWork()
 
         // the socket disconnect
         if (numBytes == 0) {
-            req->CloseSocket();
             ClearPendingSocket(req->Socket());
+            req->Socket().Cleanup();
             continue;
         }
 
         // complete recv
         if (req->Type() == IOReq::ReqType_Recv) {
-            DoResponse(req->Socket(), req->data(), numBytes);
+            if (m_RecvCb) {
+                m_RecvCb(req->Socket(), req->data(), numBytes);
+            }
+
             if (!req->Recv(req->Socket())) {
                 delete req;
                 std::cout << "recv one error:" << WSAGetLastError() << std::endl;
@@ -151,81 +183,55 @@ void IocpServer::DoWork()
     }
 }
 
-// handle recv data
-void IocpServer::DoResponse(SOCKET socket, const char* data, DWORD size)
-{
-    if (socket == INVALID_SOCKET) {
-        return;
-    }
-
-    std::string dataStr = std::string(data, size);
-    std::cout << "recv" << dataStr << std::endl;
-
-    // echo send
-    IOReq* res = new IOReq;
-
-    m_PendingSendMutex.lock();
-    m_PendingSendReqs.emplace(std::make_pair(socket, res));
-    m_PendingSendMutex.unlock();
-
-    res->Send(socket, data, size);
-}
-
 void IocpServer::CleanupAllPendingSocket()
 {
-    m_PendingRecvMutex.lock();
-    for (auto iter = m_PendingRecvReqs.begin(); iter != m_PendingRecvReqs.end();) {
-        SOCKET s = iter->first;
-        if (s != INVALID_SOCKET) {
-            shutdown(s, SD_BOTH);
-            Utils::CleanupSocket(s);
+    {
+        std::lock_guard<std::mutex> guard(m_PendingRecvMutex);
+        for (auto iter = m_PendingRecvReqs.begin(); iter != m_PendingRecvReqs.end();) {
+            LSocket sock = iter->first;
+            sock.Cleanup();
+
+            delete iter->second;
+            iter = m_PendingRecvReqs.erase(iter);
         }
-
-        delete iter->second;
-        iter = m_PendingRecvReqs.erase(iter);
     }
-    m_PendingRecvMutex.unlock();
 
-    m_PendingSendMutex.lock();
-    for (auto iter = m_PendingSendReqs.begin(); iter != m_PendingSendReqs.end();) {
-        SOCKET s = iter->first;
-        if (s != INVALID_SOCKET) {
-            shutdown(s, SD_BOTH);
-            Utils::CleanupSocket(s);
+    {
+        std::lock_guard<std::mutex> guard(m_PendingSendMutex);
+        for (auto iter = m_PendingSendReqs.begin(); iter != m_PendingSendReqs.end();) {
+            LSocket sock = iter->first;
+            sock.Cleanup();
+
+            delete iter->second;
+            iter = m_PendingSendReqs.erase(iter);
         }
-
-        delete iter->second;
-        iter = m_PendingSendReqs.erase(iter);
     }
-    m_PendingSendMutex.unlock();
 }
 
-void IocpServer::ClearPendingSocket(SOCKET socket)
+void IocpServer::ClearPendingSocket(const LSocket& socket)
 {
     ClearPendingRecvSocket(socket);
     ClearPendingSendSocket(socket);
 }
 
-void IocpServer::ClearPendingRecvSocket(SOCKET socket)
+void IocpServer::ClearPendingRecvSocket(const LSocket& socket)
 {
-    m_PendingRecvMutex.lock();
+    std::lock_guard<std::mutex> guard(m_PendingRecvMutex);
     auto iter = m_PendingRecvReqs.find(socket);
     if (iter != m_PendingRecvReqs.end()) {
         delete iter->second;
         m_PendingRecvReqs.erase(socket);
     }
-    m_PendingRecvMutex.unlock();
 }
 
-void IocpServer::ClearPendingSendSocket(SOCKET socket)
+void IocpServer::ClearPendingSendSocket(const LSocket& socket)
 {
-    m_PendingSendMutex.lock();
+    std::lock_guard<std::mutex> guard(m_PendingSendMutex);
     auto iter = m_PendingSendReqs.find(socket);
     if (iter != m_PendingSendReqs.end()) {
         delete iter->second;
         m_PendingSendReqs.erase(socket);
     }
-    m_PendingSendMutex.unlock();
 }
 
 int IocpServer::CreateSomeWorkThread()
@@ -249,25 +255,24 @@ int IocpServer::CreateSomeWorkThread()
 
 void IocpServer::AcceptReqAndRecv()
 {
-    SOCKET acceptSocket;
     while (1) {
-        acceptSocket = WSAAccept(m_ListenSocket, NULL, NULL, NULL, 0);
-        if (m_ListenSocket == INVALID_SOCKET) {
+        LSocket acceptSocket = WSAAccept(m_ListenSocket.Get(), NULL, NULL, NULL, 0);
+        if (m_ListenSocket.IsInvalid()) {
             std::cout << "accept stop..." << std::endl;
             return;
         }
 
-        if (acceptSocket == INVALID_SOCKET) {
+        if (acceptSocket.IsInvalid()) {
             std::cout << "accept one invaile scoket..." << std::endl;
             continue;
         }
 
-        std::cout << "accept on socket" << acceptSocket << std::endl;
+        std::cout << "accept on socket" << acceptSocket.Get() << std::endl;
 
         unsigned long chOpt;
         *((char *)&chOpt) = 1;
 
-        int iResult = setsockopt(acceptSocket, SOL_SOCKET, SO_KEEPALIVE, (char *)&chOpt, sizeof(chOpt));
+        int iResult = setsockopt(acceptSocket.Get(), SOL_SOCKET, SO_KEEPALIVE, (char *)&chOpt, sizeof(chOpt));
         if (iResult == SOCKET_ERROR) {
             std::cout << "setsockopt for SO_KEEPALIVE failed with error: " << WSAGetLastError() << std::endl;
         }
@@ -277,21 +282,21 @@ void IocpServer::AcceptReqAndRecv()
         aliveDetail.onoff = 1;
         aliveDetail.keepalivetime = 1000 * 30;
         aliveDetail.keepaliveinterval = 1000 * 10; // Resend if No-Reply
-        WSAIoctl(acceptSocket, SIO_KEEPALIVE_VALS, &aliveDetail,sizeof(tcp_keepalive),
+        WSAIoctl(acceptSocket.Get(), SIO_KEEPALIVE_VALS, &aliveDetail,sizeof(tcp_keepalive),
             NULL, 0, (unsigned long *)&chOpt, 0, NULL);
 
         // recv
-        m_IocpHandle.AssociateSocket(acceptSocket, NULL);
+        m_IocpHandle.AssociateSocket(acceptSocket.Get(), NULL);
 
         IOReq *req = new IOReq;
+        {
+            std::lock_guard<std::mutex> guard(m_PendingRecvMutex);
+            m_PendingRecvReqs.emplace(std::make_pair(acceptSocket, req));
+        }
 
-        m_PendingRecvMutex.lock();
-        m_PendingRecvReqs.emplace(std::make_pair(acceptSocket, req));
-        m_PendingRecvMutex.unlock();
-
-        bool rc = req->Recv(acceptSocket);
+        bool rc = req->Recv(acceptSocket.Get());
         if (!rc) {
-            delete req;
+            ClearPendingRecvSocket(acceptSocket);
             std::cout << "recv one error:" << WSAGetLastError() << std::endl;
         }
     }

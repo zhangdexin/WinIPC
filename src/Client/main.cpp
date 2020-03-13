@@ -2,7 +2,6 @@
 #include <string>
 #include <set>
 
-#include "CmnHdr.h"
 #include "Client.h"
 
 // Client startup

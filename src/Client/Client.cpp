@@ -17,7 +17,10 @@ void Client::Run()
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
         while (1) {
             std::string str = "123456";
-            this->SendSync(str.c_str(), str.size());
+            bool rc = this->SendSync(str.c_str(), str.size());
+            if (!rc) {
+                return;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     });
@@ -129,7 +132,6 @@ void Client::RecvSync()
     while (1)
     {
         char buf[BUFFER_SIZE] = { 0 };
-        bool connected = true;
 
         // ignore exceed BUFFER_SIE pkt
         int ret = recv(m_Socket, buf, 1024 * 4, 0);
@@ -137,6 +139,7 @@ void Client::RecvSync()
             std::cout << "recv:" << buf << std::endl;
         }
         else if (ret == 0) { // disconnect
+            std::cout << "disconnect" << std::endl;
             break;
         }
         else if (ret == SOCKET_ERROR) {
