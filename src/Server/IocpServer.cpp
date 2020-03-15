@@ -7,10 +7,20 @@
 #define DEFAULT_PORT "27016"
 #pragma comment(lib, "Ws2_32.lib")
 
-IocpServer::IocpServer() :
+IocpServer::IocpServer(ListenType type, const std::string& port) :
     m_IocpHandle(0),
     m_RecvCb(nullptr)
-{}
+{
+    if (type == ListenType_IPC) {
+        if (port == "") m_Port = std::to_string(Utils::GetIdlePort());
+        else            m_Port = port;
+        Utils::WritePortToMappingFile(m_Port);
+    }
+    else {
+        if (port == "") m_Port = DEFAULT_PORT;
+        else            m_Port = port;
+    }
+}
 
 IocpServer::~IocpServer()
 {}
@@ -102,7 +112,7 @@ int IocpServer::Init()
     hints.ai_flags = AI_PASSIVE;
 
     // Resolve the local address and port to be used by the server
-    iResult = getaddrinfo(NULL, DEFAULT_PORT, &hints, &result);
+    iResult = getaddrinfo(NULL, m_Port.c_str(), &hints, &result);
     if (iResult != 0) {
         std::cout << "getaddrinfo failed: " << iResult << std::endl;
         WSACleanup();

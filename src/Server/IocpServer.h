@@ -21,7 +21,12 @@
 class IocpServer
 {
 public:
-    IocpServer();
+    enum ListenType {
+        ListenType_IPC,
+        ListenType_NPC,
+    };
+
+    IocpServer(ListenType type = ListenType_IPC, const std::string& port = "");
     ~IocpServer();
 
     using RecvFunction = std::function<void(const LSocket& sock, const char* data, DWORD size)>;
@@ -48,6 +53,7 @@ private:
     LSocket            m_ListenSocket;
     CIOCP              m_IocpHandle;
     RecvFunction       m_RecvCb;
+    std::string        m_Port;
 
     using MAPReq = std::map<LSocket, IOReq*>;
     MAPReq             m_PendingRecvReqs;

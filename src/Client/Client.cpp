@@ -6,6 +6,34 @@
 #pragma comment (lib, "Mswsock.lib")
 #pragma comment (lib, "AdvApi32.lib")
 
+Client::Client(ConnectType type, const std::string& host, unsigned port) :
+    m_HostName(host),
+    m_ConnectPort(port)
+{
+    if (type == ConnectType_IPC) {
+        m_HostName = "127.0.0.1";
+        if (m_ConnectPort == 0) {
+            HANDLE hFile = OpenFileMapping(FILE_MAP_READ, FALSE, L"win_ipc_temp_port");
+            if (hFile == NULL) {
+                throw std::exception("open maping error");
+            }
+
+            BYTE* byte = (LPBYTE)MapViewOfFile(hFile, FILE_MAP_READ, 0, 0, 0);
+            if (byte == NULL) {
+                throw std::exception("maping byte null");
+            }
+
+            m_ConnectPort = (int)std::stoi(std::string((char*)byte));
+
+            UnmapViewOfFile(hFile);
+            CloseHandle(hFile);
+        }
+    }
+    else {
+        if (m_ConnectPort == 0) m_ConnectPort = 27016;
+    }
+}
+
 void Client::Run()
 {
     if (!Init()) {

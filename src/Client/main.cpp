@@ -9,6 +9,7 @@ int main()
 {
     std::cout << "Hello Client!\n"; 
 
-    Client client("127.0.0.1", 27016);
+    Client client(Client::ConnectType_IPC, "127.0.0.1", 12345);
     client.Run();
+    return 0;
 }

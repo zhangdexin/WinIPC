@@ -15,9 +15,12 @@
 class Client
 {
 public:
-    Client(const std::string& host, unsigned port) : 
-        m_HostName(host),
-        m_ConnectPort(port) {}
+    enum ConnectType {
+        ConnectType_IPC,
+        ConnectType_NPC,
+    };
+
+    Client(ConnectType type, const std::string& host = "127.0.0.1", unsigned port = 0);
 
     void Run();
     void Stop();
