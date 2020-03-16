@@ -20,12 +20,23 @@ public:
         ConnectType_NPC,
     };
 
-    Client(ConnectType type, const std::string& host = "127.0.0.1", unsigned port = 0);
+    enum Status {
+        Status_Idle,
+        Status_Running,
+        Ststus_Stopped
+    };
 
-    void Run();
+    Client(ConnectType type, const std::string& host = "127.0.0.1", unsigned port = 0);
+    ~Client();
+
+    using RecvFunction = std::function<void(const char*, int)>;
+    void Run(const RecvFunction& recvCb = nullptr);
     void Stop();
 
     bool SendSync(const char* buf, size_t size);
+    Status GetStatus() const {
+        return m_Status;
+    }
 
 private:
     bool Init();
@@ -36,6 +47,8 @@ private:
     std::string        m_HostName;
     unsigned           m_ConnectPort;
     CEnsureCloseSocket m_Socket;
+    RecvFunction       m_RecvCallback;
+    Status             m_Status;
 };
 
 #endif

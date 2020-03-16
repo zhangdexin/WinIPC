@@ -8,7 +8,8 @@
 
 Client::Client(ConnectType type, const std::string& host, unsigned port) :
     m_HostName(host),
-    m_ConnectPort(port)
+    m_ConnectPort(port),
+    m_Status(Status_Idle)
 {
     if (type == ConnectType_IPC) {
         m_HostName = "127.0.0.1";
@@ -34,38 +35,29 @@ Client::Client(ConnectType type, const std::string& host, unsigned port) :
     }
 }
 
-void Client::Run()
+Client::~Client()
 {
+    Stop();
+}
+
+void Client::Run(const RecvFunction& recvCb)
+{
+    m_RecvCallback = recvCb;
     if (!Init()) {
         return;
     }
 
-#ifdef _DEBUG
-    std::thread thd([this]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-        while (1) {
-            std::string str = "123456";
-            bool rc = this->SendSync(str.c_str(), str.size());
-            if (!rc) {
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-    });
-#endif // DEBUG
-
+    m_Status = Status_Running;
     RecvSync();
-    WSACleanup();
 
-#ifdef _DEBUG
-    thd.join();
-#endif // _DEBUG
+    WSACleanup();
 }
 
 void Client::Stop()
 {
     shutdown(m_Socket, SD_BOTH);
     m_Socket.Cleanup();
+    m_Status = Ststus_Stopped;
 }
 
 bool Client::SendSync(const char* buf, size_t size)
@@ -164,7 +156,9 @@ void Client::RecvSync()
         // ignore exceed BUFFER_SIE pkt
         int ret = recv(m_Socket, buf, 1024 * 4, 0);
         if (ret > 0 && ret < BUFFER_SIZE) {
-            std::cout << "recv:" << buf << std::endl;
+            if (m_RecvCallback) {
+                m_RecvCallback(buf, ret);
+            }
         }
         else if (ret == 0) { // disconnect
             std::cout << "disconnect" << std::endl;

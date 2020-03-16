@@ -7,9 +7,9 @@ int main()
     IocpServer server(IocpServer::ListenType_IPC, "12345");
     server.Run([&server](const LSocket& socket, const char* data, DWORD size) {
         std::string dataStr = std::string(data, size);
-        std::cout << dataStr << std::endl;
+        std::cout << "server recv:" << dataStr << std::endl;
 
-        server.SendMsg(socket, dataStr + ":server");
+        server.SendMsg(socket, dataStr);
 
         static int t = 0;
         t++;
